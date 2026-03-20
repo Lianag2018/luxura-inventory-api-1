@@ -30,8 +30,12 @@ def main():
 
             if existing:
                 for field, value in data.items():
+                    if field == "options" and not isinstance(value, dict):
+                        value = {}
                     setattr(existing, field, value)
             else:
+                if "options" in data and not isinstance(data["options"], dict):
+                    data["options"] = {}
                 db.add(Product(**data))
 
             synced += 1
