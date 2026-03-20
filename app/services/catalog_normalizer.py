@@ -19,6 +19,18 @@ def _first_non_empty_str(*values: Any) -> Optional[str]:
     return None
 
 
+def _normalize_options_payload(value: Any) -> Dict[str, Any]:
+    """
+    Normalise productOptions Wix pour qu'ils soient toujours stockés
+    sous forme de dict compatible avec le champ Product.options.
+    """
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, list):
+        return {"productOptions": value}
+    return {}
+    
+    
 def normalize_variant(parent: Dict[str, Any], variant: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """
     1 variant Wix = 1 Product Luxura
