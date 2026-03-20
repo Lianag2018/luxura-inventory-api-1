@@ -29,11 +29,12 @@ def _normalize_options_payload(value: Any) -> Dict[str, Any]:
     if isinstance(value, list):
         return {"productOptions": value}
     return {}
-    
-    
+
+
 def normalize_variant(parent: Dict[str, Any], variant: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """
     1 variant Wix = 1 Product Luxura
+
     Règle SKU:
       - si Wix fournit un SKU de variante non vide -> on le prend
       - sinon fallback stable: "<wix_product_id>:<wix_variant_id>"
@@ -49,10 +50,9 @@ def normalize_variant(parent: Dict[str, Any], variant: Dict[str, Any]) -> Option
 
     sku_field = variant.get("sku")  # peut être str OU dict OU vide
 
-    # --- SKU variante (Wix peut le mettre à plusieurs endroits) ---
     sku = _first_non_empty_str(
         sku_field if isinstance(sku_field, str) else None,
-        (variant.get("variant") or {}).get("sku"),  # ✅ le cas vu dans ton debug
+        (variant.get("variant") or {}).get("sku"),
         (sku_field or {}).get("value") if isinstance(sku_field, dict) else None,
         variant.get("stockKeepingUnit"),
         (variant.get("skuData") or {}).get("sku"),
@@ -63,17 +63,14 @@ def normalize_variant(parent: Dict[str, Any], variant: Dict[str, Any]) -> Option
     if not sku:
         sku = f"{wix_product_id_s}:{wix_variant_id_s}"
 
-    # --- choices/options ---
     choices = variant.get("choices") or variant.get("options") or {}
     if not isinstance(choices, dict):
         choices = {}
 
-    # --- name ---
     base_name = _clean_str(parent.get("name")) or "Sans nom"
     suffix = " ".join(str(v) for v in choices.values() if v)
     name = f"{base_name} — {suffix}".strip(" —") if suffix else base_name
 
-    # --- inventory (souvent pas fiable dans variants v1, mais on garde) ---
     inv = variant.get("inventory") or {}
     if not isinstance(inv, dict):
         inv = {}
@@ -92,7 +89,6 @@ def normalize_variant(parent: Dict[str, Any], variant: Dict[str, Any]) -> Option
     else:
         is_in_stock = qty > 0
 
-    # --- price ---
     price_parent = (parent.get("priceData") or {}).get("price") or 0
     price_variant = (variant.get("priceData") or {}).get("price", price_parent) or 0
     try:
@@ -126,11 +122,11 @@ def normalize_product(wix_product: Dict[str, Any], version: str) -> Dict[str, An
     NOTE: sku vide -> None pour éviter de casser un UNIQUE sur sku.
     """
     if version == "CATALOG_V1":
-        inventory = (wix_product.get("inventory") or {}) or {}
+        inventory = wix_product.get("inventory") or {}
         if not isinstance(inventory, dict):
             inventory = {}
 
-        price_data = (wix_product.get("priceData") or {}) or {}
+        price_data = wix_product.get("priceData") or {}
         if not isinstance(price_data, dict):
             price_data = {}
 
@@ -156,8 +152,7 @@ def normalize_product(wix_product: Dict[str, Any], version: str) -> Dict[str, An
             "handle": wix_product.get("slug"),
             "is_in_stock": bool(inventory.get("inStock", True)),
             "quantity": qty,
-            "options": wix_product.get("productOptions") or {},
+            "options": _normalize_options_payload(wix_product.get("productOptions")),
         }
 
     raise ValueError(f"Version de catalogue inconnue: {version}")
-   
