@@ -25,17 +25,27 @@ def _safe_options(value: Any) -> Dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
-def _find_existing_parent(db: Session, wix_id: str) -> Optional[Product]:
-    with db.no_autoflush:
-        stmt = select(Product).where(Product.wix_id == wix_id)
-        rows = db.exec(stmt).all()
+def _find_existing_parent(db: Session, wix_id: Optional[str], sku: Optional[str]) -> Optional[Product]:
+    if wix_id:
+        with db.no_autoflush:
+            stmt = select(Product).where(Product.wix_id == wix_id)
+            rows = db.exec(stmt).all()
 
-    for row in rows:
-        if not _is_variant_record(row):
-            return row
+        for row in rows:
+            if not _is_variant_record(row):
+                return row
+
+    if sku:
+        with db.no_autoflush:
+            stmt = select(Product).where(Product.sku == sku)
+            rows = db.exec(stmt).all()
+
+        for row in rows:
+            if not _is_variant_record(row):
+                return row
 
     return None
-
+    
 
 def _find_existing_variant(
     db: Session,
@@ -91,17 +101,26 @@ def main() -> None:
         for wp in raw_products:
             parent_data = normalize_product(wp, version)
             parent_wix_id = parent_data.get("wix_id")
+            parent_sku = parent_data.get("sku")
 
-            if not parent_wix_id:
+            if not parent_wix_id and not parent_sku:
                 continue
 
-            existing_parent = _find_existing_parent(db, str(parent_wix_id))
+            existing_parent = _find_existing_parent(
+                db,
+                str(parent_wix_id).strip() if parent_wix_id else None,
+                str(parent_sku).strip() if parent_sku else None,
+            )
+
             _upsert_product(db, existing_parent, parent_data)
             synced_parents += 1
             processed_since_commit += 1
 
             try:
-                variants = client.query_variants_v1(product_id=str(parent_wix_id), limit=100)
+                variants = client.query_variants_v1(
+                    product_id=str(parent_wix_id),
+                    limit=100,
+                ) if parent_wix_id else []
             except Exception as e:
                 print(f"[WARN] Impossible de récupérer les variantes pour {parent_wix_id}: {e}")
                 variants = []
