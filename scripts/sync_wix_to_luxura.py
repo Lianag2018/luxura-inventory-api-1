@@ -26,22 +26,25 @@ def _safe_options(value: Any) -> Dict[str, Any]:
 
 
 def _find_existing_parent(db: Session, wix_id: Optional[str], sku: Optional[str]) -> Optional[Product]:
+    """
+    Trouve un produit parent existant:
+    1. par wix_id
+    2. sinon par SKU (fallback CRITIQUE)
+    """
+
+    # 🔹 1. Recherche par wix_id
     if wix_id:
-        with db.no_autoflush:
-            stmt = select(Product).where(Product.wix_id == wix_id)
-            rows = db.exec(stmt).all()
+        stmt = select(Product).where(Product.wix_id == wix_id)
+        row = db.exec(stmt).first()
+        if row:
+            return row
 
-        for row in rows:
-            if not _is_variant_record(row):
-                return row
-
+    # 🔹 2. Fallback par SKU (🔥 essentiel pour ton bug)
     if sku:
         with db.no_autoflush:
             stmt = select(Product).where(Product.sku == sku)
-            rows = db.exec(stmt).all()
-
-        for row in rows:
-            if not _is_variant_record(row):
+            row = db.exec(stmt).first()
+            if row:
                 return row
 
     return None
