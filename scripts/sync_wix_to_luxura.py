@@ -72,21 +72,50 @@ def _find_existing_variant(
     return None
 
 
-def _upsert_product(db: Session, existing: Optional[Product], data: Dict[str, Any]) -> None:
-    clean_data = dict(data)
+def _upsert_product(db: Session, existing: Optional[Product], data: Dict[str, Any]) -> Product:
+    """
+    Upsert SAFE:
+    - update si trouvé
+    - sinon INSERT
+    - fallback SKU pour éviter duplicate crash
+    """
 
-    if "options" in clean_data:
-        clean_data["options"] = _safe_options(clean_data["options"])
+    sku = (data.get("sku") or "").strip() or None
 
-    clean_data.pop("_track_quantity", None)
-    clean_data.pop("_quantity", None)
+    # 🔥 DOUBLE CHECK par SKU (anti crash)
+    if not existing and sku:
+        with db.no_autoflush:
+            stmt = select(Product).where(Product.sku == sku)
+            existing = db.exec(stmt).first()
 
     if existing:
-        for field, value in clean_data.items():
+        for field, value in data.items():
+            if field == "options" and not isinstance(value, dict):
+                value = {}
             setattr(existing, field, value)
-    else:
-        db.add(Product(**clean_data))
+        return existing
 
+    # 🚀 INSERT sécurisé
+    try:
+        prod = Product(**data)
+        db.add(prod)
+        return prod
+
+    except Exception as e:
+        print(f"[UPSERT FALLBACK] SKU conflict détecté → retry update: {sku}")
+
+        if sku:
+            with db.no_autoflush:
+                stmt = select(Product).where(Product.sku == sku)
+                existing = db.exec(stmt).first()
+
+            if existing:
+                for field, value in data.items():
+                    setattr(existing, field, value)
+                return existing
+
+        raise e
+        
 
 def main() -> None:
     client = WixClient()
