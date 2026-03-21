@@ -13,6 +13,9 @@ from app.services.wix_client import WixClient
 from app.services.catalog_normalizer import normalize_product, normalize_variant
 
 
+BATCH_SIZE = 25
+
+
 def _is_variant_record(prod: Product) -> bool:
     opts = prod.options if isinstance(prod.options, dict) else {}
     return bool(opts.get("wix_variant_id"))
@@ -23,8 +26,9 @@ def _safe_options(value: Any) -> Dict[str, Any]:
 
 
 def _find_existing_parent(db: Session, wix_id: str) -> Optional[Product]:
-    stmt = select(Product).where(Product.wix_id == wix_id)
-    rows = db.exec(stmt).all()
+    with db.no_autoflush:
+        stmt = select(Product).where(Product.wix_id == wix_id)
+        rows = db.exec(stmt).all()
 
     for row in rows:
         if not _is_variant_record(row):
@@ -39,14 +43,16 @@ def _find_existing_variant(
     wix_variant_id: Optional[str],
 ) -> Optional[Product]:
     if sku:
-        stmt = select(Product).where(Product.sku == sku)
-        found = db.exec(stmt).first()
+        with db.no_autoflush:
+            stmt = select(Product).where(Product.sku == sku)
+            found = db.exec(stmt).first()
         if found:
             return found
 
     if wix_variant_id:
-        stmt = select(Product)
-        rows = db.exec(stmt).all()
+        with db.no_autoflush:
+            stmt = select(Product)
+            rows = db.exec(stmt).all()
 
         for row in rows:
             opts = row.options if isinstance(row.options, dict) else {}
@@ -62,7 +68,6 @@ def _upsert_product(db: Session, existing: Optional[Product], data: Dict[str, An
     if "options" in clean_data:
         clean_data["options"] = _safe_options(clean_data["options"])
 
-    # Ces champs sont utiles au runtime, mais ne doivent pas aller dans Product
     clean_data.pop("_track_quantity", None)
     clean_data.pop("_quantity", None)
 
@@ -77,15 +82,13 @@ def main() -> None:
     client = WixClient()
     version, raw_products = client.query_products(limit=100)
 
-    with Session(engine) as db:
-        synced_parents = 0
-        synced_variants = 0
-        skipped_variants = 0
+    synced_parents = 0
+    synced_variants = 0
+    skipped_variants = 0
+    processed_since_commit = 0
 
+    with Session(engine) as db:
         for wp in raw_products:
-            # -------------------------
-            # Parent
-            # -------------------------
             parent_data = normalize_product(wp, version)
             parent_wix_id = parent_data.get("wix_id")
 
@@ -95,15 +98,13 @@ def main() -> None:
             existing_parent = _find_existing_parent(db, str(parent_wix_id))
             _upsert_product(db, existing_parent, parent_data)
             synced_parents += 1
+            processed_since_commit += 1
 
-            # -------------------------
-            # Variantes
-            # -------------------------
             try:
                 variants = client.query_variants_v1(product_id=str(parent_wix_id), limit=100)
             except Exception as e:
                 print(f"[WARN] Impossible de récupérer les variantes pour {parent_wix_id}: {e}")
-                continue
+                variants = []
 
             for variant in variants:
                 variant_data = normalize_variant(wp, variant)
@@ -123,8 +124,14 @@ def main() -> None:
 
                 _upsert_product(db, existing_variant, variant_data)
                 synced_variants += 1
+                processed_since_commit += 1
 
-        db.commit()
+                if processed_since_commit >= BATCH_SIZE:
+                    db.commit()
+                    processed_since_commit = 0
+
+        if processed_since_commit > 0:
+            db.commit()
 
     print(
         f"[SYNC] Version catalogue: {version} | "
