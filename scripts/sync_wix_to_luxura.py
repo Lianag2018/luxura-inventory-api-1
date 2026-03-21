@@ -27,28 +27,26 @@ def _safe_options(value: Any) -> Dict[str, Any]:
 
 def _find_existing_parent(db: Session, wix_id: Optional[str], sku: Optional[str]) -> Optional[Product]:
     """
-    Trouve un produit parent existant:
+    Trouve un produit parent existant :
     1. par wix_id
-    2. sinon par SKU (fallback CRITIQUE)
+    2. sinon par SKU
     """
-
-    # 🔹 1. Recherche par wix_id
     if wix_id:
-        stmt = select(Product).where(Product.wix_id == wix_id)
-        row = db.exec(stmt).first()
-        if row:
-            return row
+        with db.no_autoflush:
+            stmt = select(Product).where(Product.wix_id == wix_id)
+            row = db.exec(stmt).first()
+            if row and not _is_variant_record(row):
+                return row
 
-    # 🔹 2. Fallback par SKU (🔥 essentiel pour ton bug)
     if sku:
         with db.no_autoflush:
             stmt = select(Product).where(Product.sku == sku)
             row = db.exec(stmt).first()
-            if row:
+            if row and not _is_variant_record(row):
                 return row
 
     return None
-    
+
 
 def _find_existing_variant(
     db: Session,
@@ -59,8 +57,8 @@ def _find_existing_variant(
         with db.no_autoflush:
             stmt = select(Product).where(Product.sku == sku)
             found = db.exec(stmt).first()
-        if found:
-            return found
+            if found:
+                return found
 
     if wix_variant_id:
         with db.no_autoflush:
@@ -77,48 +75,35 @@ def _find_existing_variant(
 
 def _upsert_product(db: Session, existing: Optional[Product], data: Dict[str, Any]) -> Product:
     """
-    Upsert SAFE:
+    Upsert safe :
     - update si trouvé
-    - sinon INSERT
-    - fallback SKU pour éviter duplicate crash
+    - sinon insert
+    - recheck par SKU avant insert
     """
+    clean_data = dict(data)
 
-    sku = (data.get("sku") or "").strip() or None
+    if "options" in clean_data:
+        clean_data["options"] = _safe_options(clean_data["options"])
 
-    # 🔥 DOUBLE CHECK par SKU (anti crash)
+    clean_data.pop("_track_quantity", None)
+    clean_data.pop("_quantity", None)
+
+    sku = (clean_data.get("sku") or "").strip() or None
+
     if not existing and sku:
         with db.no_autoflush:
             stmt = select(Product).where(Product.sku == sku)
             existing = db.exec(stmt).first()
 
     if existing:
-        for field, value in data.items():
-            if field == "options" and not isinstance(value, dict):
-                value = {}
+        for field, value in clean_data.items():
             setattr(existing, field, value)
         return existing
 
-    # 🚀 INSERT sécurisé
-    try:
-        prod = Product(**data)
-        db.add(prod)
-        return prod
+    prod = Product(**clean_data)
+    db.add(prod)
+    return prod
 
-    except Exception as e:
-        print(f"[UPSERT FALLBACK] SKU conflict détecté → retry update: {sku}")
-
-        if sku:
-            with db.no_autoflush:
-                stmt = select(Product).where(Product.sku == sku)
-                existing = db.exec(stmt).first()
-
-            if existing:
-                for field, value in data.items():
-                    setattr(existing, field, value)
-                return existing
-
-        raise e
-        
 
 def main() -> None:
     client = WixClient()
@@ -138,21 +123,26 @@ def main() -> None:
             if not parent_wix_id and not parent_sku:
                 continue
 
-            existing_parent = _find_existing_parent(
-                db,
-                str(parent_wix_id).strip() if parent_wix_id else None,
-                str(parent_sku).strip() if parent_sku else None,
-            )
+            with db.no_autoflush:
+                existing_parent = _find_existing_parent(
+                    db,
+                    str(parent_wix_id).strip() if parent_wix_id else None,
+                    str(parent_sku).strip() if parent_sku else None,
+                )
 
             _upsert_product(db, existing_parent, parent_data)
             synced_parents += 1
             processed_since_commit += 1
 
             try:
-                variants = client.query_variants_v1(
-                    product_id=str(parent_wix_id),
-                    limit=100,
-                ) if parent_wix_id else []
+                variants = (
+                    client.query_variants_v1(
+                        product_id=str(parent_wix_id),
+                        limit=100,
+                    )
+                    if parent_wix_id
+                    else []
+                )
             except Exception as e:
                 print(f"[WARN] Impossible de récupérer les variantes pour {parent_wix_id}: {e}")
                 variants = []
@@ -167,11 +157,12 @@ def main() -> None:
                 wix_variant_id = variant_options.get("wix_variant_id")
                 sku = variant_data.get("sku")
 
-                existing_variant = _find_existing_variant(
-                    db=db,
-                    sku=str(sku).strip() if sku else None,
-                    wix_variant_id=str(wix_variant_id).strip() if wix_variant_id else None,
-                )
+                with db.no_autoflush:
+                    existing_variant = _find_existing_variant(
+                        db=db,
+                        sku=str(sku).strip() if sku else None,
+                        wix_variant_id=str(wix_variant_id).strip() if wix_variant_id else None,
+                    )
 
                 _upsert_product(db, existing_variant, variant_data)
                 synced_variants += 1
