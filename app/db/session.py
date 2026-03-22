@@ -55,7 +55,3 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 def get_session():
     with SessionLocal() as session:
         yield session
-
-**Copiez ce code** et remplacez le contenu de `app/db/session.py` dans votre repo GitHub Render.
-
-Après le déploiement, l'API devrait accepter les PUT sans erreurs 500! 🔧
