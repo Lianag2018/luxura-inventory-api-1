@@ -1,8 +1,7 @@
 import os
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import QueuePool
-from sqlmodel import SQLModel
+from sqlmodel import SQLModel, Session
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
@@ -34,13 +33,6 @@ def create_db_and_tables():
     SQLModel.metadata.create_all(engine)
 
 
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
-
 def get_session():
-    session = SessionLocal()
-    try:
+    with Session(engine) as session:
         yield session
-    finally:
-        session.close()
-        
