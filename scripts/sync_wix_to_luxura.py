@@ -244,6 +244,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-```
-
- votre repo GitHub, puis Render va redéployer automatiquement!**
