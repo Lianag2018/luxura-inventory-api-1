@@ -1,5 +1,5 @@
 import os
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import QueuePool
 from sqlmodel import SQLModel
@@ -11,16 +11,15 @@ if not DATABASE_URL:
 
 print(f"[DB] Using DATABASE_URL = {DATABASE_URL.split('@')[0]}@***")
 
-# Configuration robuste pour Supabase/PostgreSQL
 engine = create_engine(
     DATABASE_URL,
     poolclass=QueuePool,
-    pool_pre_ping=True,           # Vérifie la connexion avant chaque utilisation
-    pool_recycle=280,             # Recycle les connexions avant timeout Supabase (5 min)
-    pool_size=3,                  # Connexions maintenues ouvertes
-    max_overflow=5,               # Connexions supplémentaires si nécessaire
-    pool_timeout=30,              # Timeout pour obtenir une connexion
-    echo=False,                   # Mettre True pour debug SQL
+    pool_pre_ping=True,
+    pool_recycle=280,
+    pool_size=3,
+    max_overflow=5,
+    pool_timeout=30,
+    echo=False,
     connect_args={
         "keepalives": 1,
         "keepalives_idle": 30,
@@ -31,20 +30,6 @@ engine = create_engine(
 )
 
 
-# Event listener pour gérer les déconnexions
-@event.listens_for(engine, "connect")
-def connect(dbapi_connection, connection_record):
-    connection_record.info["pid"] = os.getpid()
-
-
-@event.listens_for(engine, "checkout")
-def checkout(dbapi_connection, connection_record, connection_proxy):
-    pid = os.getpid()
-    if connection_record.info.get("pid") != pid:
-        connection_record.dbapi_connection = None
-        raise Exception("Connection belongs to different process")
-
-
 def create_db_and_tables():
     SQLModel.metadata.create_all(engine)
 
@@ -53,5 +38,9 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
 def get_session():
-    with SessionLocal() as session:
+    session = SessionLocal()
+    try:
         yield session
+    finally:
+        session.close()
+        
