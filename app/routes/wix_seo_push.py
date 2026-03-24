@@ -297,20 +297,152 @@ def _extract_length_weight_from_choice_value(raw: Any) -> Tuple[Optional[str], O
     return m.group(1), m.group(2), text
 
 
-def _get_wix_variant_choice_value(wix_variant: Dict[str, Any]) -> Optional[str]:
-    choices = wix_variant.get("choices") or wix_variant.get("options") or {}
-    if not isinstance(choices, dict):
-        choices = {}
+def _debug_dump_wix_variant(wix_variant: Dict[str, Any], prefix: str = "WIX VARIANT") -> None:
+    print("=" * 80)
+    print(prefix)
+    try:
+        print(json.dumps(wix_variant, indent=2, ensure_ascii=False)[:6000])
+    except Exception as e:
+        print(f"DEBUG DUMP FAILED: {e}")
+        print(str(wix_variant)[:6000])
+    print("=" * 80)
 
-    raw = (
-        choices.get("Longeur")
-        or choices.get("Longueur")
-        or choices.get("longeur")
-        or choices.get("longueur")
-        or ""
-    )
-    raw = str(raw).strip()
-    return raw or None
+
+def _stringify_choice_value(value: Any) -> str:
+    if value is None:
+        return ""
+
+    if isinstance(value, str):
+        return value.strip()
+
+    if isinstance(value, (int, float)):
+        return str(value).strip()
+
+    if isinstance(value, dict):
+        for key in [
+            "value",
+            "description",
+            "name",
+            "label",
+            "displayName",
+            "renderedValue",
+        ]:
+            raw = value.get(key)
+            if raw not in (None, ""):
+                return str(raw).strip()
+
+    return str(value).strip()
+
+
+def _pick_length_from_dict(choices: Dict[str, Any]) -> Optional[str]:
+    if not isinstance(choices, dict):
+        return None
+
+    exact_keys = [
+        "Longeur",
+        "Longueur",
+        "longeur",
+        "longueur",
+        "Length",
+        "length",
+    ]
+
+    for key in exact_keys:
+        if key in choices:
+            val = _stringify_choice_value(choices.get(key))
+            if val:
+                print(f"FOUND LENGTH CHOICE BY EXACT KEY: {key} -> {val}")
+                return val
+
+    for key, value in choices.items():
+        norm = str(key).strip().lower()
+        if "long" in norm or "leng" in norm:
+            val = _stringify_choice_value(value)
+            if val:
+                print(f"FOUND LENGTH CHOICE BY FUZZY KEY: {key} -> {val}")
+                return val
+
+    return None
+
+
+def _extract_choice_from_option_selections(option_selections: Any) -> Optional[str]:
+    if not isinstance(option_selections, list):
+        return None
+
+    for item in option_selections:
+        if not isinstance(item, dict):
+            continue
+
+        name = str(
+            item.get("name")
+            or item.get("optionName")
+            or item.get("title")
+            or ""
+        ).strip().lower()
+
+        if "long" not in name and "leng" not in name:
+            continue
+
+        for key in ["value", "selection", "description", "renderedValue", "label"]:
+            val = _stringify_choice_value(item.get(key))
+            if val:
+                print(f"FOUND LENGTH CHOICE IN optionSelections: {name} -> {val}")
+                return val
+
+    return None
+
+
+def _get_wix_variant_choice_value(wix_variant: Dict[str, Any]) -> Optional[str]:
+    _debug_dump_wix_variant(wix_variant, prefix="WIX VARIANT FULL STRUCTURE")
+
+    candidate_dicts = [
+        ("root.choices", wix_variant.get("choices")),
+        ("root.options", wix_variant.get("options")),
+        ("root.variant.choices", (wix_variant.get("variant") or {}).get("choices")),
+        ("root.variant.options", (wix_variant.get("variant") or {}).get("options")),
+        ("root.productVariant.choices", (wix_variant.get("productVariant") or {}).get("choices")),
+        ("root.productVariant.options", (wix_variant.get("productVariant") or {}).get("options")),
+        ("root.selectionChoices", wix_variant.get("selectionChoices")),
+        ("root.selectedChoices", wix_variant.get("selectedChoices")),
+    ]
+
+    for label, candidate in candidate_dicts:
+        if isinstance(candidate, dict):
+            print(f"TRY DICT SOURCE: {label}")
+            val = _pick_length_from_dict(candidate)
+            if val:
+                print(f"FINAL CHOICE VALUE FROM {label}: {val}")
+                return val
+
+    candidate_lists = [
+        ("root.optionSelections", wix_variant.get("optionSelections")),
+        ("root.variant.optionSelections", (wix_variant.get("variant") or {}).get("optionSelections")),
+        ("root.productVariant.optionSelections", (wix_variant.get("productVariant") or {}).get("optionSelections")),
+    ]
+
+    for label, candidate in candidate_lists:
+        if isinstance(candidate, list):
+            print(f"TRY LIST SOURCE: {label}")
+            val = _extract_choice_from_option_selections(candidate)
+            if val:
+                print(f"FINAL CHOICE VALUE FROM {label}: {val}")
+                return val
+
+    # dernier filet de sécurité : on cherche dans tout le JSON
+    blob = ""
+    try:
+        blob = json.dumps(wix_variant, ensure_ascii=False)
+    except Exception:
+        blob = str(wix_variant)
+
+    m = re.search(r'(\d{2})["″]?\s*(\d{2,3})\s*gram', blob, flags=re.IGNORECASE)
+    if m:
+        fallback = f'{m.group(1)}" {m.group(2)} grammes'
+        print(f"FALLBACK CHOICE FROM FULL JSON SCAN: {fallback}")
+        return fallback
+
+    print("NO LENGTH CHOICE FOUND IN WIX VARIANT")
+    return None
 
 
 def _build_variant_sku_from_wix_variant(
@@ -321,18 +453,28 @@ def _build_variant_sku_from_wix_variant(
 
     color_code = _extract_color_code(parent)
     if not color_code:
+        print("SKU BUILD SKIPPED: missing color_code")
         return None
 
     raw_choice = _get_wix_variant_choice_value(wix_variant)
-    length, weight, _raw = _extract_length_weight_from_choice_value(raw_choice)
+    print("RAW CHOICE USED FOR SKU:", raw_choice)
+
+    length, weight, parsed_raw = _extract_length_weight_from_choice_value(raw_choice)
+    print("PARSED LENGTH:", length)
+    print("PARSED WEIGHT:", weight)
+    print("PARSED RAW:", parsed_raw)
+
     if not length or not weight:
+        print("SKU BUILD SKIPPED: missing length/weight after parsing")
         return None
 
     color = _color_meta(color_code)
     clean_code = color_code.upper().replace("/", "-")
     sku_name = color.get("sku", clean_code)
 
-    return f"{prefix}-{length}-{weight}-{clean_code}-{sku_name}"
+    sku = f"{prefix}-{length}-{weight}-{clean_code}-{sku_name}"
+    print("FINAL TARGET SKU:", sku)
+    return sku
 
 
 def _prepare_variant_updates_from_wix(
@@ -343,22 +485,36 @@ def _prepare_variant_updates_from_wix(
     updates: List[Dict[str, Any]] = []
     seen_target_skus = set()
 
-    for wix_variant in wix_variants:
+    print(f"TOTAL WIX VARIANTS RECEIVED: {len(wix_variants)}")
+
+    for idx, wix_variant in enumerate(wix_variants, start=1):
+        print("#" * 80)
+        print(f"PROCESSING WIX VARIANT #{idx}")
+
         variant_id = str(
             wix_variant.get("id")
             or wix_variant.get("_id")
             or wix_variant.get("variantId")
+            or (wix_variant.get("variant") or {}).get("id")
             or ""
         ).strip()
 
+        print("VARIANT ID:", variant_id)
+
         if not variant_id:
+            print("SKIP: missing variant_id")
             continue
 
         raw_choice = _get_wix_variant_choice_value(wix_variant)
         target_sku = _build_variant_sku_from_wix_variant(parent, wix_variant)
+
         current_sku = ""
         if current_variant_skus:
             current_sku = current_variant_skus.get(variant_id, "")
+
+        print("CURRENT SKU:", current_sku)
+        print("RAW CHOICE:", raw_choice)
+        print("TARGET SKU:", target_sku)
 
         if not target_sku:
             updates.append({
@@ -371,6 +527,7 @@ def _prepare_variant_updates_from_wix(
             continue
 
         if target_sku in seen_target_skus:
+            print("SKIP: duplicate target_sku in same batch")
             updates.append({
                 "variant_id": variant_id,
                 "choice": raw_choice,
@@ -390,8 +547,11 @@ def _prepare_variant_updates_from_wix(
             "status": "planned",
         })
 
-    return updates
+    print("FINAL VARIANT UPDATE PLAN:")
+    print(json.dumps(updates, indent=2, ensure_ascii=False)[:6000])
 
+    return updates
+    
 
 def _html_escape(v: str) -> str:
     return html.escape(v or "", quote=True)
