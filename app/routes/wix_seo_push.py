@@ -438,31 +438,109 @@ Luxura Distribution - Extensions professionnelles haut de gamme.
 
 def _build_info_sections(prod: Product) -> List[Dict[str, str]]:
     product_type, series, _prefix = _infer_type_and_series(prod)
+    color_code = _extract_color_code(prod) or ""
+    color = _color_meta(color_code)
+    luxe_name = color.get("luxe", color_code)
+
     label = f"{product_type} {series}".strip()
 
-    # Formats possibles à partir des variantes locales du même wix_id
-    # sera surchargé plus tard si on a la liste complète
+    if product_type == "Halo":
+        desc = (
+            f"Installation rapide et facile. Les extensions {label} offrent un volume instantané "
+            f"et un rendu naturel sans engagement permanent. Cheveux 100% naturels Remy à cuticules alignées."
+        )
+        about = (
+            f"Les extensions {label} Luxura sont conçues pour les clientes qui veulent plus de volume "
+            f"et de longueur en quelques minutes. Série {series}, qualité professionnelle, confort maximal "
+            f"et teinte {luxe_name} #{color_code}."
+        )
+        recommendation = (
+            "1 pièce pour un volume naturel, 2 pièces si vous recherchez un effet plus dense et plus glamour."
+        )
+        maintenance = (
+            "Brosser délicatement avant et après usage. Laver avec un shampooing doux sans sulfates. "
+            "Utiliser un masque hydratant sur les longueurs. Sécher à l'air libre ou à basse température."
+        )
+
+    elif product_type == "Genius":
+        desc = (
+            f"Les extensions {label} sont des trames invisibles haut de gamme conçues pour une finition "
+            f"naturelle, légère et luxueuse. Cheveux 100% naturels Remy, parfaits pour les salons professionnels."
+        )
+        about = (
+            f"La série {series} propose des extensions Genius souples, discrètes et confortables, "
+            f"idéales pour une pose couture ou intégrée. Teinte {luxe_name} #{color_code}."
+        )
+        recommendation = (
+            "1 paquet pour un ajout discret, 2 à 3 paquets pour une transformation complète et un volume riche."
+        )
+        maintenance = (
+            "Laver avec des soins professionnels sans sulfates. Hydrater régulièrement les longueurs. "
+            "Démêler des pointes vers la racine avec une brosse adaptée. Limiter la chaleur excessive."
+        )
+
+    elif product_type == "Tape":
+        desc = (
+            f"Les extensions {label} à bandes adhésives offrent une pose rapide, discrète et confortable. "
+            f"Elles sont parfaites pour obtenir longueur et volume avec un résultat naturel."
+        )
+        about = (
+            f"La série {series} Luxura utilise des cheveux 100% naturels Remy avec une finition premium. "
+            f"La teinte {luxe_name} #{color_code} assure un rendu lumineux et élégant."
+        )
+        recommendation = (
+            "1 paquet pour densifier légèrement, 2 paquets ou plus pour un résultat plus complet et homogène."
+        )
+        maintenance = (
+            "Utiliser un shampooing doux sans huiles lourdes aux racines. Éviter les produits gras sur les bandes. "
+            "Brosser délicatement et espacer les lavages pour prolonger la tenue."
+        )
+
+    elif product_type == "I-Tip":
+        desc = (
+            f"Les extensions {label} I-Tip permettent une pose mèche à mèche souple, naturelle et personnalisée. "
+            f"Elles conviennent parfaitement aux poses professionnelles haut de gamme."
+        )
+        about = (
+            f"La série {series} Luxura offre une finition raffinée avec cheveux 100% naturels Remy, "
+            f"cuticules alignées et teinte {luxe_name} #{color_code}."
+        )
+        recommendation = (
+            "Quantité recommandée selon le résultat souhaité : volume léger, correction ciblée ou transformation complète."
+        )
+        maintenance = (
+            "Employer des soins doux sans sulfates. Hydrater les longueurs sans surcharger les points d'attache. "
+            "Démêler soigneusement chaque jour et éviter les gestes brusques."
+        )
+
+    else:
+        desc = (
+            f"Extensions {label} de qualité professionnelle, conçues pour offrir longueur, volume et rendu naturel. "
+            f"Cheveux 100% naturels Remy."
+        )
+        about = (
+            f"Extensions Luxura Série {series}, finition premium, teinte {luxe_name} #{color_code}."
+        )
+        recommendation = "La quantité recommandée varie selon le volume désiré et le service recherché."
+        maintenance = (
+            "Utiliser des soins doux, hydrater les longueurs et démêler délicatement pour préserver la qualité des cheveux."
+        )
+
     return [
         {
             "key": "description",
             "title": "Description",
-            "plainDescription": (
-                f"Installation rapide et facile. Extensions {label} confortables et discrètes. "
-                f"Cheveux 100% naturels Remy à cuticules alignées."
-            ),
+            "plainDescription": desc,
         },
         {
             "key": "a-propos",
             "title": "À propos",
-            "plainDescription": (
-                "Extensions Luxura 100% cheveux naturels Remy. Durée de vie 9 à 12 mois "
-                "(semi-permanent) ou jusqu'à 2 ans pour certaines pièces prêt-à-porter selon l'entretien."
-            ),
+            "plainDescription": about,
         },
         {
             "key": "recommandation",
             "title": "Recommandation",
-            "plainDescription": "1 paquet pour volume naturel, 2 paquets pour volume maximum.",
+            "plainDescription": recommendation,
         },
         {
             "key": "format",
@@ -472,16 +550,21 @@ def _build_info_sections(prod: Product) -> List[Dict[str, str]]:
         {
             "key": "entretien",
             "title": "Entretien",
-            "plainDescription": (
-                "Shampooing doux sans sulfates. Lavage 1x/semaine. Masque hydratant 1x sur 2. "
-                "Démêler avec un peigne à grosses dents en commençant par les pointes. "
-                "Séchage à l'air libre ou chaleur modérée."
-            ),
+            "plainDescription": maintenance,
         },
         {
             "key": "precommande",
             "title": "Précommande",
-            "plainDescription": "Pré-commandes acceptées. Notification à l'arrivée du stock.",
+            "plainDescription": (
+                "Pré-commandes acceptées. Contactez-nous pour connaître les délais et être avisée dès le retour en stock."
+            ),
+        },
+        {
+            "key": "seo-local",
+            "title": "Disponibilité",
+            "plainDescription": (
+                "Disponible pour le Québec, Montréal, Lévis, Trois-Rivières, la Beauce et Sainte-Marie."
+            ),
         },
     ]
 
