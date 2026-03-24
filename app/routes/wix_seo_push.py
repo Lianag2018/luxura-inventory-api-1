@@ -391,42 +391,49 @@ def _build_description_html(prod: Product) -> str:
     product_type, series, _prefix = _infer_type_and_series(prod)
     color_code = _extract_color_code(prod) or ""
     color = _color_meta(color_code)
-    product_name = f"{product_type} Série {series} - {color['luxe']} #{color_code}".strip()
+    luxe_name = color.get("luxe", color_code)
 
-    if product_type == "Halo":
-        accroche = "Extensions halo haut de gamme, confortables et rapides à poser."
-        duree = "6 à 12 mois avec un bon entretien."
-        application = "Pose rapide, sans colle, idéale pour un volume immédiat."
-    elif product_type == "Genius":
-        accroche = "Trames invisibles professionnelles pour un rendu naturel et léger."
-        duree = "8 à 12 mois avec un bon entretien."
-        application = "Application cousue ou intégrée par un professionnel."
-    elif product_type == "Tape":
-        accroche = "Bandes adhésives premium pour une pose discrète et rapide."
-        duree = "6 à 10 semaines par pose, avec entretien adapté."
-        application = "Application par sandwich adhésif sur cheveux propres et secs."
-    else:
-        accroche = "Extensions kératine I-Tip premium pour une pose souple et personnalisée."
-        duree = "4 à 8 mois avec un bon entretien."
-        application = "Application mèche par mèche par un professionnel."
+    return f"""
+Extensions {product_type} - Volume instantané sans engagement par Luxura.
 
-    return (
-        f"<p><strong>Extensions { _html_escape(product_type) } Série { _html_escape(series) }</strong> - "
-        f"{ _html_escape(accroche) }</p>"
-        f"<p><strong>CONCEPT</strong><br>"
-        f"• Couleur luxe: { _html_escape(color['luxe']) } #{ _html_escape(color_code) }<br>"
-        f"• Finition professionnelle pour salons et techniciennes</p>"
-        f"<p><strong>QUALITÉ PREMIUM</strong><br>"
-        f"• 100% cheveux humains vierges Remy<br>"
-        f"• Cuticules intactes et alignées<br>"
-        f"• Texture douce, mouvement naturel</p>"
-        f"<p><strong>DURÉE DE VIE</strong><br>"
-        f"• { _html_escape(duree) }</p>"
-        f"<p><strong>APPLICATION</strong><br>"
-        f"• { _html_escape(application) }</p>"
-        f"<p>Extensions capillaires Québec Montréal<br>"
-        f"Luxura Distribution - Extensions professionnelles</p>"
-    )
+
+🎯 CONCEPT UNIQUE:
+• Fil invisible ajustable qui repose sur votre tête  
+• Aucune fixation permanente - 100% réversible  
+• Application en moins de 2 minutes  
+• Retrait instantané sans aide professionnelle  
+
+
+💎 QUALITÉ PREMIUM:
+• 100% cheveux humains vierges Remy  
+• Cuticules intactes pour un mouvement naturel  
+• Série {series} - Collection professionnelle Luxura  
+• Teinte: {luxe_name} #{color_code}  
+
+
+✨ AVANTAGES UNIQUES:
+• Zéro dommage aux cheveux naturels  
+• Parfait pour usage quotidien ou occasionnel  
+• Idéal pour cheveux fins ou fragiles  
+• Durée de vie: 12 mois et plus avec bon entretien  
+
+
+📍 APPLICATION:
+Auto-application - Aucune aide requise  
+
+
+📍 DISPONIBLE AU QUÉBEC:
+Extensions capillaires Québec  
+Extensions cheveux Montréal  
+Extensions capillaires Laval  
+Extensions cheveux Lévis  
+Extensions capillaires Trois-Rivières  
+Extensions cheveux Beauce  
+Extensions capillaires Sainte-Marie  
+
+
+Luxura Distribution - Extensions professionnelles haut de gamme.
+"""
 
 
 def _build_info_sections(prod: Product) -> List[Dict[str, str]]:
