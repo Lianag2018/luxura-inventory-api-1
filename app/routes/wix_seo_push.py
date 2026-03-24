@@ -933,38 +933,72 @@ def _wix_v1_patch_variants(
     access_token: str,
     updates: List[Dict[str, str]],
 ) -> Dict[str, Any]:
-    payload_candidates = [
-        {"variants": [{"id": u["id"], "sku": u["sku"]} for u in updates]},
-        {"variants": [{"id": u["id"], "variant": {"sku": u["sku"]}} for u in updates]},
+    """
+    Met à jour les variantes Wix v1 en les identifiant par `choices`
+    et en enveloppant le SKU dans `variant`.
+
+    updates attendu:
+    [
+        {
+            "choice": '16" 120 grammes',
+            "sku": "H-16-120-DB-NUIT-MYSTERE"
+        },
+        {
+            "choice": '20" 140 grammes',
+            "sku": "H-20-140-DB-NUIT-MYSTERE"
+        }
     ]
+    """
 
-    last_error = None
-    attempt_logs = []
+    variant_payloads = []
 
-    for payload in payload_candidates:
-        print("PATCH VARIANTS PAYLOAD:", json.dumps(payload, ensure_ascii=False)[:4000])
+    for u in updates:
+        choice_value = str(u.get("choice") or "").strip()
+        sku_value = str(u.get("sku") or "").strip()
 
-        r = requests.patch(
-            f"{WIX_API_BASE}/stores/v1/products/{wix_id}/variants",
-            headers=_headers(access_token),
-            json=payload,
-            timeout=30,
-        )
+        if not choice_value or not sku_value:
+            continue
 
-        print("PATCH VARIANTS STATUS:", r.status_code)
-        print("PATCH VARIANTS RESPONSE:", r.text[:4000])
-
-        if r.ok:
-            return _safe_json_response(r)
-
-        attempt_logs.append({
-            "status_code": r.status_code,
-            "response": r.text[:2000],
-            "payload": payload,
+        variant_payloads.append({
+            "choices": {
+                "Longeur": choice_value
+            },
+            "variant": {
+                "sku": sku_value
+            }
         })
-        last_error = f"{r.status_code} {r.text}"
 
-    raise HTTPException(502, f"Wix patch variants failed: {last_error} | attempts={json.dumps(attempt_logs, ensure_ascii=False)[:8000]}")
+    if not variant_payloads:
+        return {
+            "ok": True,
+            "skipped": True,
+            "reason": "no valid variant updates",
+            "variants": [],
+        }
+
+    payload = {
+        "variants": variant_payloads
+    }
+
+    print("PATCH VARIANTS PAYLOAD:", json.dumps(payload, ensure_ascii=False)[:4000])
+
+    r = requests.patch(
+        f"{WIX_API_BASE}/stores/v1/products/{wix_id}/variants",
+        headers=_headers(access_token),
+        json=payload,
+        timeout=30,
+    )
+
+    print("PATCH VARIANTS STATUS:", r.status_code)
+    print("PATCH VARIANTS RESPONSE:", r.text[:4000])
+
+    if not r.ok:
+        raise HTTPException(502, f"Wix patch variants failed: {r.status_code} {r.text}")
+
+    try:
+        return r.json() if r.text else {}
+    except ValueError:
+        return {"raw": r.text}
 
 
 def _wix_v3_get_product(wix_id: str, access_token: str) -> Dict[str, Any]:
