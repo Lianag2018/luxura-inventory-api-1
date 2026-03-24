@@ -194,35 +194,40 @@ def _extract_color_code(prod: Product) -> Optional[str]:
 
 
 def _extract_length_weight_from_variant(prod: Product) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    """
+    Lit la longueur/poids depuis les choices locales DB.
+    Ex:
+    '16" 120 grammes' -> ('16', '120', '16" 120 grammes')
+    """
     opts = _safe_options(prod.options)
     choices = _safe_options(opts.get("choices"))
 
     raw = (
-        choices.get("Longueur")
-        or choices.get("Longeur")
-        or choices.get("longueur")
+        choices.get("Longeur")
+        or choices.get("Longueur")
         or choices.get("longeur")
+        or choices.get("longueur")
         or ""
     )
     raw = str(raw).strip()
 
     if not raw:
         name = prod.name or ""
-        m_name = re.search(r'(\d{2})"\s*(\d{2,3})\s*gram', name, flags=re.IGNORECASE)
+        m_name = re.search(r'(\d{2})["\'″]?\s*(\d{2,3})\s*gram', name, flags=re.IGNORECASE)
         if m_name:
             length = m_name.group(1)
             weight = m_name.group(2)
             return length, weight, f'{length}" {weight} grammes'
         return None, None, None
 
-    m = re.search(r'(\d{2})"\s*(\d{2,3})\s*gram', raw, flags=re.IGNORECASE)
+    m = re.search(r'(\d{2})["\'″]?\s*(\d{2,3})\s*gram', raw, flags=re.IGNORECASE)
     if not m:
         return None, None, raw
 
     length = m.group(1)
     weight = m.group(2)
     return length, weight, raw
-
+    
 
 def _color_meta(code: Optional[str]) -> Dict[str, str]:
     if not code:
@@ -255,6 +260,129 @@ def _build_variant_sku(prod: Product) -> Optional[str]:
     return f"{prefix}-{length}-{weight}-{color_code.upper()}-{color['sku']}"
 
 
+def _extract_length_weight_from_choice_value(raw: Any) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    """
+    Lit la longueur/poids depuis la vraie variante Wix.
+    Ex:
+    '16" 120 grammes' -> ('16', '120', '16" 120 grammes')
+    '20" 140 grammes' -> ('20', '140', '20" 140 grammes')
+    """
+    text = str(raw or "").strip()
+    if not text:
+        return None, None, None
+
+    m = re.search(r'(\d{2})["\'″]?\s*(\d{2,3})\s*gram', text, flags=re.IGNORECASE)
+    if not m:
+        return None, None, text
+
+    return m.group(1), m.group(2), text
+
+
+def _get_wix_variant_choice_value(wix_variant: Dict[str, Any]) -> Optional[str]:
+    choices = wix_variant.get("choices") or wix_variant.get("options") or {}
+    if not isinstance(choices, dict):
+        choices = {}
+
+    raw = (
+        choices.get("Longeur")
+        or choices.get("Longueur")
+        or choices.get("longeur")
+        or choices.get("longueur")
+        or ""
+    )
+    raw = str(raw).strip()
+    return raw or None
+
+
+def _build_variant_sku_from_wix_variant(
+    parent: Product,
+    wix_variant: Dict[str, Any],
+) -> Optional[str]:
+    """
+    Construit le SKU depuis la VRAIE variante Wix.
+    Ex:
+    H-16-120-1B-NOIR-SOIE
+    H-20-140-1B-NOIR-SOIE
+    """
+    _product_type, _series, prefix = _infer_type_and_series(parent)
+
+    color_code = _extract_color_code(parent)
+    if not color_code:
+        return None
+
+    raw_choice = _get_wix_variant_choice_value(wix_variant)
+    length, weight, _raw = _extract_length_weight_from_choice_value(raw_choice)
+    if not length or not weight:
+        return None
+
+    color = _color_meta(color_code)
+    clean_code = color_code.upper().replace("/", "-")
+    sku_name = color.get("sku", clean_code)
+
+    return f"{prefix}-{length}-{weight}-{clean_code}-{sku_name}"
+
+
+def _prepare_variant_updates_from_wix(
+    parent: Product,
+    wix_variants: List[Dict[str, Any]],
+    current_variant_skus: Optional[Dict[str, str]] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Prépare les mises à jour variantes à partir des vraies variantes Wix.
+    """
+    updates: List[Dict[str, Any]] = []
+    seen_target_skus = set()
+
+    for wix_variant in wix_variants:
+        variant_id = str(
+            wix_variant.get("id")
+            or wix_variant.get("_id")
+            or wix_variant.get("variantId")
+            or ""
+        ).strip()
+
+        if not variant_id:
+            continue
+
+        raw_choice = _get_wix_variant_choice_value(wix_variant)
+        target_sku = _build_variant_sku_from_wix_variant(parent, wix_variant)
+        current_sku = ""
+        if current_variant_skus:
+            current_sku = current_variant_skus.get(variant_id, "")
+
+        if not target_sku:
+            updates.append({
+                "variant_id": variant_id,
+                "choice": raw_choice,
+                "current_sku": current_sku,
+                "target_sku": None,
+                "status": "skipped_missing_parts",
+            })
+            continue
+
+        if target_sku in seen_target_skus:
+            updates.append({
+                "variant_id": variant_id,
+                "choice": raw_choice,
+                "current_sku": current_sku,
+                "target_sku": target_sku,
+                "status": "skipped_duplicate_target_in_batch",
+            })
+            continue
+
+        seen_target_skus.add(target_sku)
+
+        updates.append({
+            "variant_id": variant_id,
+            "choice": raw_choice,
+            "current_sku": current_sku,
+            "target_sku": target_sku,
+            "status": "planned",
+        })
+
+    return updates
+    
+    
 def _html_escape(v: str) -> str:
     return html.escape(v or "", quote=True)
 
@@ -592,48 +720,63 @@ def _wix_variant_sku_map(wix_variants: List[Dict[str, Any]]) -> Dict[str, str]:
 def _build_plan_for_parent(
     parent: Product,
     variants: List[Product],
+    wix_variants: Optional[List[Dict[str, Any]]] = None,
+    current_variant_skus: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     target_name = _build_product_name(parent)
     target_desc = _build_description_html(parent)
     target_sections = _build_info_sections_with_formats(parent, variants)
 
-    variant_plans = []
-    seen_target_skus = set()
+    variant_plans: List[Dict[str, Any]] = []
 
-    for v in variants:
-        variant_id = _get_variant_id(v)
-        if not variant_id:
-            continue
+    if wix_variants:
+        variant_plans = _prepare_variant_updates_from_wix(
+            parent=parent,
+            wix_variants=wix_variants,
+            current_variant_skus=current_variant_skus,
+        )
+    else:
+        # fallback preview local si jamais Wix n'est pas interrogé
+        seen_target_skus = set()
+        for v in variants:
+            variant_id = _get_variant_id(v)
+            if not variant_id:
+                continue
 
-        target_sku = _build_variant_sku(v)
-        if not target_sku:
+            length, weight, raw_choice = _extract_length_weight_from_variant(v)
+            target_sku = _build_variant_sku(v)
+
+            if not target_sku:
+                variant_plans.append({
+                    "db_id": v.id,
+                    "variant_id": variant_id,
+                    "choice": raw_choice,
+                    "current_sku": v.sku,
+                    "target_sku": None,
+                    "status": "skipped_missing_parts",
+                })
+                continue
+
+            if target_sku in seen_target_skus:
+                variant_plans.append({
+                    "db_id": v.id,
+                    "variant_id": variant_id,
+                    "choice": raw_choice,
+                    "current_sku": v.sku,
+                    "target_sku": target_sku,
+                    "status": "skipped_duplicate_target_in_batch",
+                })
+                continue
+
+            seen_target_skus.add(target_sku)
             variant_plans.append({
                 "db_id": v.id,
                 "variant_id": variant_id,
-                "current_sku": v.sku,
-                "target_sku": None,
-                "status": "skipped_missing_parts",
-            })
-            continue
-
-        if target_sku in seen_target_skus:
-            variant_plans.append({
-                "db_id": v.id,
-                "variant_id": variant_id,
+                "choice": raw_choice,
                 "current_sku": v.sku,
                 "target_sku": target_sku,
-                "status": "skipped_duplicate_target_in_batch",
+                "status": "planned",
             })
-            continue
-
-        seen_target_skus.add(target_sku)
-        variant_plans.append({
-            "db_id": v.id,
-            "variant_id": variant_id,
-            "current_sku": v.sku,
-            "target_sku": target_sku,
-            "status": "planned",
-        })
 
     return {
         "db_parent_id": parent.id,
@@ -671,10 +814,25 @@ def push_preview(req: PushRequest, db: Session = Depends(get_session)) -> Dict[s
         limit=req.limit,
     )
 
+    instance_id = _get_instance_id()
+    access_token = _fetch_access_token(instance_id)
+
     changes = []
     for parent in parents:
         parent_row, variants = _collect_family(db, parent)
-        changes.append(_build_plan_for_parent(parent_row, variants))
+        wix_id = (parent_row.wix_id or "").strip()
+
+        wix_variants = _wix_v1_query_variants(wix_id, access_token) if wix_id else []
+        current_variant_skus = _wix_variant_sku_map(wix_variants)
+
+        changes.append(
+            _build_plan_for_parent(
+                parent=parent_row,
+                variants=variants,
+                wix_variants=wix_variants,
+                current_variant_skus=current_variant_skus,
+            )
+        )
 
     return {
         "ok": True,
@@ -682,7 +840,7 @@ def push_preview(req: PushRequest, db: Session = Depends(get_session)) -> Dict[s
         "count": len(changes),
         "changes": changes,
     }
-
+    
 
 @router.post("/seo/push_apply")
 def push_apply(req: PushRequest, db: Session = Depends(get_session)) -> Dict[str, Any]:
@@ -707,7 +865,6 @@ def push_apply(req: PushRequest, db: Session = Depends(get_session)) -> Dict[str
 
     for parent in parents:
         parent_row, variants = _collect_family(db, parent)
-        plan = _build_plan_for_parent(parent_row, variants)
         wix_id = (parent_row.wix_id or "").strip()
 
         try:
@@ -718,6 +875,12 @@ def push_apply(req: PushRequest, db: Session = Depends(get_session)) -> Dict[str
             current_variant_skus = _wix_variant_sku_map(current_variants)
             target_skus_in_wix = {sku for sku in current_variant_skus.values() if sku}
 
+            plan = _build_plan_for_parent(
+                parent=parent_row,
+                variants=variants,
+                wix_variants=current_variants,
+                current_variant_skus=current_variant_skus,
+            )
             variant_updates = []
             variant_errors = []
 
@@ -726,10 +889,10 @@ def push_apply(req: PushRequest, db: Session = Depends(get_session)) -> Dict[str
                     skipped += 1
                     continue
 
-                target_sku = vp["target_sku"]
-                variant_id = vp["variant_id"]
-                current_sku = current_variant_skus.get(variant_id)
-
+                target_sku = vp.get("target_sku")
+                variant_id = vp.get("variant_id")
+                current_sku = vp.get("current_sku") or current_variant_skus.get(variant_id, "")
+                
                 if not target_sku:
                     skipped += 1
                     continue
