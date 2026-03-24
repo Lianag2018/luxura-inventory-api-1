@@ -1,6 +1,7 @@
 import os
 import re
 import html
+import json
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
@@ -90,6 +91,9 @@ def _fetch_access_token(instance_id: str) -> str:
     except requests.RequestException as e:
         raise HTTPException(502, f"Token fetch network error: {e}")
 
+    print("TOKEN STATUS:", token_res.status_code)
+    print("TOKEN RESPONSE:", token_res.text[:1000])
+
     if not token_res.ok:
         raise HTTPException(502, f"Token fetch failed: {token_res.status_code} {token_res.text}")
 
@@ -111,6 +115,34 @@ def _headers(access_token: str) -> Dict[str, str]:
         "Content-Type": "application/json",
         "Accept": "application/json",
     }
+
+
+# -------------------------
+# Small utils
+# -------------------------
+def _safe_json_response(resp: requests.Response) -> Dict[str, Any]:
+    try:
+        return resp.json() if resp.text else {}
+    except ValueError:
+        return {"raw": resp.text}
+
+
+def _extract_product_name(data: Dict[str, Any]) -> str:
+    if not isinstance(data, dict):
+        return ""
+    product = data.get("product")
+    if isinstance(product, dict):
+        return str(product.get("name") or "").strip()
+    return str(data.get("name") or "").strip()
+
+
+def _extract_product_description(data: Dict[str, Any]) -> str:
+    if not isinstance(data, dict):
+        return ""
+    product = data.get("product")
+    if isinstance(product, dict):
+        return str(product.get("description") or "").strip()
+    return str(data.get("description") or "").strip()
 
 
 # -------------------------
@@ -179,12 +211,10 @@ def _extract_color_code(prod: Product) -> Optional[str]:
         prod.handle or "",
     ])
 
-    # d'abord dans le nom #CODE
     m = re.search(r"#\s*([A-Za-z0-9/]+)", text)
     if m:
         return m.group(1).strip().upper()
 
-    # ensuite dans un ancien SKU type H16120#1
     if prod.sku:
         m2 = re.search(r"#([A-Za-z0-9/]+)$", prod.sku.strip(), flags=re.IGNORECASE)
         if m2:
@@ -194,11 +224,6 @@ def _extract_color_code(prod: Product) -> Optional[str]:
 
 
 def _extract_length_weight_from_variant(prod: Product) -> Tuple[Optional[str], Optional[str], Optional[str]]:
-    """
-    Lit la longueur/poids depuis les choices locales DB.
-    Ex:
-    '16" 120 grammes' -> ('16', '120', '16" 120 grammes')
-    """
     opts = _safe_options(prod.options)
     choices = _safe_options(opts.get("choices"))
 
@@ -227,7 +252,7 @@ def _extract_length_weight_from_variant(prod: Product) -> Tuple[Optional[str], O
     length = m.group(1)
     weight = m.group(2)
     return length, weight, raw
-    
+
 
 def _color_meta(code: Optional[str]) -> Dict[str, str]:
     if not code:
@@ -246,8 +271,7 @@ def _build_product_name(prod: Product) -> str:
 
 
 def _build_variant_sku(prod: Product) -> Optional[str]:
-    product_type, _series, prefix = _infer_type_and_series(prod)
-    _ = product_type  # silence
+    _product_type, _series, prefix = _infer_type_and_series(prod)
     color_code = _extract_color_code(prod)
     if not color_code:
         return None
@@ -257,16 +281,11 @@ def _build_variant_sku(prod: Product) -> Optional[str]:
         return None
 
     color = _color_meta(color_code)
-    return f"{prefix}-{length}-{weight}-{color_code.upper()}-{color['sku']}"
+    clean_code = color_code.upper().replace("/", "-")
+    return f"{prefix}-{length}-{weight}-{clean_code}-{color['sku']}"
 
 
 def _extract_length_weight_from_choice_value(raw: Any) -> Tuple[Optional[str], Optional[str], Optional[str]]:
-    """
-    Lit la longueur/poids depuis la vraie variante Wix.
-    Ex:
-    '16" 120 grammes' -> ('16', '120', '16" 120 grammes')
-    '20" 140 grammes' -> ('20', '140', '20" 140 grammes')
-    """
     text = str(raw or "").strip()
     if not text:
         return None, None, None
@@ -298,12 +317,6 @@ def _build_variant_sku_from_wix_variant(
     parent: Product,
     wix_variant: Dict[str, Any],
 ) -> Optional[str]:
-    """
-    Construit le SKU depuis la VRAIE variante Wix.
-    Ex:
-    H-16-120-1B-NOIR-SOIE
-    H-20-140-1B-NOIR-SOIE
-    """
     _product_type, _series, prefix = _infer_type_and_series(parent)
 
     color_code = _extract_color_code(parent)
@@ -327,9 +340,6 @@ def _prepare_variant_updates_from_wix(
     wix_variants: List[Dict[str, Any]],
     current_variant_skus: Optional[Dict[str, str]] = None,
 ) -> List[Dict[str, Any]]:
-    """
-    Prépare les mises à jour variantes à partir des vraies variantes Wix.
-    """
     updates: List[Dict[str, Any]] = []
     seen_target_skus = set()
 
@@ -381,8 +391,8 @@ def _prepare_variant_updates_from_wix(
         })
 
     return updates
-    
-    
+
+
 def _html_escape(v: str) -> str:
     return html.escape(v or "", quote=True)
 
@@ -396,44 +406,38 @@ def _build_description_html(prod: Product) -> str:
     return f"""
 Extensions {product_type} - Volume instantané sans engagement par Luxura.
 
-
 🎯 CONCEPT UNIQUE:
-• Fil invisible ajustable qui repose sur votre tête  
-• Aucune fixation permanente - 100% réversible  
-• Application en moins de 2 minutes  
-• Retrait instantané sans aide professionnelle  
-
+• Fil invisible ajustable qui repose sur votre tête
+• Aucune fixation permanente - 100% réversible
+• Application en moins de 2 minutes
+• Retrait instantané sans aide professionnelle
 
 💎 QUALITÉ PREMIUM:
-• 100% cheveux humains vierges Remy  
-• Cuticules intactes pour un mouvement naturel  
-• Série {series} - Collection professionnelle Luxura  
-• Teinte: {luxe_name} #{color_code}  
-
+• 100% cheveux humains vierges Remy
+• Cuticules intactes pour un mouvement naturel
+• Série {series} - Collection professionnelle Luxura
+• Teinte: {luxe_name} #{color_code}
 
 ✨ AVANTAGES UNIQUES:
-• Zéro dommage aux cheveux naturels  
-• Parfait pour usage quotidien ou occasionnel  
-• Idéal pour cheveux fins ou fragiles  
-• Durée de vie: 12 mois et plus avec bon entretien  
-
+• Zéro dommage aux cheveux naturels
+• Parfait pour usage quotidien ou occasionnel
+• Idéal pour cheveux fins ou fragiles
+• Durée de vie: 12 mois et plus avec bon entretien
 
 📍 APPLICATION:
-Auto-application - Aucune aide requise  
-
+Auto-application - Aucune aide requise
 
 📍 DISPONIBLE AU QUÉBEC:
-Extensions capillaires Québec  
-Extensions cheveux Montréal  
-Extensions capillaires Laval  
-Extensions cheveux Lévis  
-Extensions capillaires Trois-Rivières  
-Extensions cheveux Beauce  
-Extensions capillaires Sainte-Marie  
-
+Extensions capillaires Québec
+Extensions cheveux Montréal
+Extensions capillaires Laval
+Extensions cheveux Lévis
+Extensions capillaires Trois-Rivières
+Extensions cheveux Beauce
+Extensions capillaires Sainte-Marie
 
 Luxura Distribution - Extensions professionnelles haut de gamme.
-"""
+""".strip()
 
 
 def _build_info_sections(prod: Product) -> List[Dict[str, str]]:
@@ -576,7 +580,7 @@ def _build_info_sections_with_formats(parent: Product, variants: List[Product]) 
     for v in variants:
         length, weight, _raw = _extract_length_weight_from_variant(v)
         if length and weight:
-            formats.append(f'{length} pouces ({weight}g)')
+            formats.append(f"{length} pouces ({weight}g)")
 
     formats = sorted(set(formats))
     if formats:
@@ -621,7 +625,7 @@ def _collect_family(db: Session, parent: Product) -> Tuple[Product, List[Product
 
 
 # -------------------------
-# Wix API helpers
+# Wix API helpers - V1 / V3
 # -------------------------
 def _wix_v1_get_product(wix_id: str, access_token: str) -> Dict[str, Any]:
     r = requests.get(
@@ -629,9 +633,30 @@ def _wix_v1_get_product(wix_id: str, access_token: str) -> Dict[str, Any]:
         headers=_headers(access_token),
         timeout=30,
     )
+
+    print("GET PRODUCT STATUS:", r.status_code)
+    print("GET PRODUCT RESPONSE:", r.text[:4000])
+
     if not r.ok:
         raise HTTPException(502, f"Wix get product failed: {r.status_code} {r.text}")
-    return r.json()
+
+    return _safe_json_response(r)
+
+
+def _wix_v1_verify_product(wix_id: str, access_token: str) -> Dict[str, Any]:
+    r = requests.get(
+        f"{WIX_API_BASE}/stores/v1/products/{wix_id}",
+        headers={"Authorization": f"Bearer {access_token}", "Accept": "application/json"},
+        timeout=30,
+    )
+
+    print("VERIFY STATUS:", r.status_code)
+    print("VERIFY RESPONSE:", r.text[:4000])
+
+    if not r.ok:
+        raise HTTPException(502, f"Wix verify product failed: {r.status_code} {r.text}")
+
+    return _safe_json_response(r)
 
 
 def _wix_v1_patch_product_basic(
@@ -641,22 +666,85 @@ def _wix_v1_patch_product_basic(
     name: str,
     description: str,
 ) -> Dict[str, Any]:
-    payload = {
-        "name": name,
-        "description": description,
-    }
-    r = requests.patch(
-        f"{WIX_API_BASE}/stores/v1/products/{wix_id}",
-        headers=_headers(access_token),
-        json=payload,
-        timeout=30,
+    """
+    IMPORTANT:
+    On ne considère PAS un 200 comme un succès réel.
+    On vérifie via un GET derrière.
+    """
+
+    url = f"{WIX_API_BASE}/stores/v1/products/{wix_id}"
+    headers = _headers(access_token)
+
+    payload_candidates = [
+        {
+            "label": "wrapped_product",
+            "payload": {
+                "product": {
+                    "name": name,
+                    "description": description,
+                }
+            },
+        },
+        {
+            "label": "flat_payload",
+            "payload": {
+                "name": name,
+                "description": description,
+            },
+        },
+    ]
+
+    attempts: List[Dict[str, Any]] = []
+
+    for candidate in payload_candidates:
+        label = candidate["label"]
+        payload = candidate["payload"]
+
+        print("PATCH PRODUCT FORMAT:", label)
+        print("PATCH PRODUCT PAYLOAD:", json.dumps(payload, ensure_ascii=False)[:4000])
+
+        r = requests.patch(
+            url,
+            headers=headers,
+            json=payload,
+            timeout=30,
+        )
+
+        print("PATCH STATUS:", r.status_code)
+        print("PATCH RESPONSE:", r.text[:4000])
+
+        patch_json = _safe_json_response(r)
+
+        attempts.append({
+            "format": label,
+            "status_code": r.status_code,
+            "response": patch_json,
+        })
+
+        if not r.ok:
+            continue
+
+        verified = _wix_v1_verify_product(wix_id, access_token)
+        verified_name = _extract_product_name(verified)
+        verified_description = _extract_product_description(verified)
+
+        print("VERIFIED NAME:", verified_name)
+        print("VERIFIED DESCRIPTION LENGTH:", len(verified_description or ""))
+
+        if verified_name == name:
+            return {
+                "ok": True,
+                "patch_format": label,
+                "patch_response": patch_json,
+                "verified_product": verified,
+                "verified_name": verified_name,
+                "verified_description": verified_description,
+            }
+
+    raise HTTPException(
+        502,
+        f"Wix patch product did not apply changes. Attempts={json.dumps(attempts, ensure_ascii=False)[:8000]}"
     )
-    if not r.ok:
-        raise HTTPException(502, f"Wix patch product failed: {r.status_code} {r.text}")
-    try:
-        return r.json()
-    except ValueError:
-        return {"raw": r.text}
 
 
 def _wix_v1_query_variants(wix_id: str, access_token: str) -> List[Dict[str, Any]]:
@@ -666,10 +754,14 @@ def _wix_v1_query_variants(wix_id: str, access_token: str) -> List[Dict[str, Any
         json={"query": {"paging": {"limit": 100}}},
         timeout=30,
     )
+
+    print("QUERY VARIANTS STATUS:", r.status_code)
+    print("QUERY VARIANTS RESPONSE:", r.text[:4000])
+
     if not r.ok:
         raise HTTPException(502, f"Wix query variants failed: {r.status_code} {r.text}")
 
-    data = r.json() or {}
+    data = _safe_json_response(r)
     items = data.get("variants") or data.get("items") or []
     if not isinstance(items, list):
         return []
@@ -681,31 +773,38 @@ def _wix_v1_patch_variants(
     access_token: str,
     updates: List[Dict[str, str]],
 ) -> Dict[str, Any]:
-    """
-    Deux payloads tentés par prudence.
-    """
     payload_candidates = [
         {"variants": [{"id": u["id"], "sku": u["sku"]} for u in updates]},
         {"variants": [{"id": u["id"], "variant": {"sku": u["sku"]}} for u in updates]},
     ]
 
     last_error = None
+    attempt_logs = []
+
     for payload in payload_candidates:
+        print("PATCH VARIANTS PAYLOAD:", json.dumps(payload, ensure_ascii=False)[:4000])
+
         r = requests.patch(
             f"{WIX_API_BASE}/stores/v1/products/{wix_id}/variants",
             headers=_headers(access_token),
             json=payload,
             timeout=30,
         )
-        if r.ok:
-            try:
-                return r.json()
-            except ValueError:
-                return {"raw": r.text}
 
+        print("PATCH VARIANTS STATUS:", r.status_code)
+        print("PATCH VARIANTS RESPONSE:", r.text[:4000])
+
+        if r.ok:
+            return _safe_json_response(r)
+
+        attempt_logs.append({
+            "status_code": r.status_code,
+            "response": r.text[:2000],
+            "payload": payload,
+        })
         last_error = f"{r.status_code} {r.text}"
 
-    raise HTTPException(502, f"Wix patch variants failed: {last_error}")
+    raise HTTPException(502, f"Wix patch variants failed: {last_error} | attempts={json.dumps(attempt_logs, ensure_ascii=False)[:8000]}")
 
 
 def _wix_v3_get_product(wix_id: str, access_token: str) -> Dict[str, Any]:
@@ -714,9 +813,14 @@ def _wix_v3_get_product(wix_id: str, access_token: str) -> Dict[str, Any]:
         headers=_headers(access_token),
         timeout=30,
     )
+
+    print("V3 GET PRODUCT STATUS:", r.status_code)
+    print("V3 GET PRODUCT RESPONSE:", r.text[:4000])
+
     if not r.ok:
         raise HTTPException(502, f"Wix v3 get product failed: {r.status_code} {r.text}")
-    return r.json()
+
+    return _safe_json_response(r)
 
 
 def _wix_v3_get_or_create_info_section(
@@ -731,15 +835,23 @@ def _wix_v3_get_or_create_info_section(
         "title": title,
         "plainDescription": plain_description,
     }
+
+    print("GET/CREATE INFO SECTION PAYLOAD:", json.dumps(payload, ensure_ascii=False)[:4000])
+
     r = requests.post(
         f"{WIX_API_BASE}/stores/v3/info-sections/get-or-create",
         headers=_headers(access_token),
         json=payload,
         timeout=30,
     )
+
+    print("GET/CREATE INFO SECTION STATUS:", r.status_code)
+    print("GET/CREATE INFO SECTION RESPONSE:", r.text[:4000])
+
     if not r.ok:
         raise HTTPException(502, f"Wix get-or-create info section failed: {r.status_code} {r.text}")
-    return r.json()
+
+    return _safe_json_response(r)
 
 
 def _extract_v3_product(data: Dict[str, Any]) -> Dict[str, Any]:
@@ -768,7 +880,7 @@ def _wix_v3_patch_product_info_sections(
 
     merged = list(current_sections)
     for section in info_sections:
-        if section.get("id") not in current_ids:
+        if section.get("id") and section.get("id") not in current_ids:
             merged.append(section)
 
     payload_candidates = [
@@ -777,21 +889,32 @@ def _wix_v3_patch_product_info_sections(
     ]
 
     last_error = None
+    logs = []
+
     for payload in payload_candidates:
+        print("PATCH PRODUCT INFO SECTIONS PAYLOAD:", json.dumps(payload, ensure_ascii=False)[:4000])
+
         r = requests.patch(
             f"{WIX_API_BASE}/stores/v3/products/{wix_id}",
             headers=_headers(access_token),
             json=payload,
             timeout=30,
         )
+
+        print("PATCH PRODUCT INFO SECTIONS STATUS:", r.status_code)
+        print("PATCH PRODUCT INFO SECTIONS RESPONSE:", r.text[:4000])
+
         if r.ok:
-            try:
-                return r.json()
-            except ValueError:
-                return {"raw": r.text}
+            return _safe_json_response(r)
+
+        logs.append({
+            "status_code": r.status_code,
+            "response": r.text[:2000],
+            "payload": payload,
+        })
         last_error = f"{r.status_code} {r.text}"
 
-    raise HTTPException(502, f"Wix v3 patch info sections failed: {last_error}")
+    raise HTTPException(502, f"Wix v3 patch info sections failed: {last_error} | attempts={json.dumps(logs, ensure_ascii=False)[:8000]}")
 
 
 # -------------------------
@@ -826,7 +949,6 @@ def _build_plan_for_parent(
             current_variant_skus=current_variant_skus,
         )
     else:
-        # fallback preview local si jamais Wix n'est pas interrogé
         seen_target_skus = set()
         for v in variants:
             variant_id = _get_variant_id(v)
@@ -930,7 +1052,7 @@ def push_preview(req: PushRequest, db: Session = Depends(get_session)) -> Dict[s
         "count": len(changes),
         "changes": changes,
     }
-    
+
 
 @router.post("/seo/push_apply")
 def push_apply(req: PushRequest, db: Session = Depends(get_session)) -> Dict[str, Any]:
@@ -957,10 +1079,37 @@ def push_apply(req: PushRequest, db: Session = Depends(get_session)) -> Dict[str
         parent_row, variants = _collect_family(db, parent)
         wix_id = (parent_row.wix_id or "").strip()
 
+        plan = _build_plan_for_parent(
+            parent=parent_row,
+            variants=variants,
+        )
+
+        if not wix_id:
+            errors += 1
+            results.append({
+                "wix_id": "",
+                "db_parent_id": plan["db_parent_id"],
+                "error": "missing wix_id",
+                "rollback": None,
+            })
+            continue
+
         try:
+            print("=" * 100)
+            print("PUSH APPLY START")
+            print("DB PARENT ID:", plan["db_parent_id"])
+            print("WIX ID:", wix_id)
+            print("TARGET NAME:", plan["target_name"])
+
             current_product_data = _wix_v1_get_product(wix_id, access_token)
             current_variants = _wix_v1_query_variants(wix_id, access_token)
             rollback = _rollback_snapshot(wix_id, current_product_data, current_variants)
+
+            before_name = _extract_product_name(current_product_data)
+            before_description = _extract_product_description(current_product_data)
+
+            print("BEFORE NAME:", before_name)
+            print("BEFORE DESCRIPTION LENGTH:", len(before_description or ""))
 
             current_variant_skus = _wix_variant_sku_map(current_variants)
             target_skus_in_wix = {sku for sku in current_variant_skus.values() if sku}
@@ -971,6 +1120,7 @@ def push_apply(req: PushRequest, db: Session = Depends(get_session)) -> Dict[str
                 wix_variants=current_variants,
                 current_variant_skus=current_variant_skus,
             )
+
             variant_updates = []
             variant_errors = []
 
@@ -982,12 +1132,11 @@ def push_apply(req: PushRequest, db: Session = Depends(get_session)) -> Dict[str
                 target_sku = vp.get("target_sku")
                 variant_id = vp.get("variant_id")
                 current_sku = vp.get("current_sku") or current_variant_skus.get(variant_id, "")
-                
+
                 if not target_sku:
                     skipped += 1
                     continue
 
-                # si le target sku existe déjà sur une autre variante Wix de ce produit, on skip
                 if target_sku in target_skus_in_wix and current_sku != target_sku:
                     variant_errors.append({
                         "variant_id": variant_id,
@@ -1014,6 +1163,16 @@ def push_apply(req: PushRequest, db: Session = Depends(get_session)) -> Dict[str
                 description=plan["target_description"],
             )
 
+            verified_product = product_resp.get("verified_product") or {}
+            verified_name = _extract_product_name(verified_product)
+            verified_description = _extract_product_description(verified_product)
+
+            if verified_name != plan["target_name"]:
+                raise HTTPException(
+                    502,
+                    f"Product name not applied. expected={plan['target_name']!r} got={verified_name!r}"
+                )
+
             variants_resp = None
             if variant_updates:
                 variants_resp = _wix_v1_patch_variants(
@@ -1024,6 +1183,7 @@ def push_apply(req: PushRequest, db: Session = Depends(get_session)) -> Dict[str
 
             info_sections_resp = None
             info_section_errors = []
+
             if req.include_info_sections:
                 try:
                     created_sections = []
@@ -1038,7 +1198,7 @@ def push_apply(req: PushRequest, db: Session = Depends(get_session)) -> Dict[str
                         section_obj = sec.get("infoSection") if isinstance(sec, dict) else None
                         if not isinstance(section_obj, dict):
                             section_obj = sec if isinstance(sec, dict) else {}
-                        if section_obj:
+                        if section_obj and section_obj.get("id"):
                             created_sections.append({
                                 "id": section_obj.get("id"),
                                 "uniqueName": section_obj.get("uniqueName") or unique_name,
@@ -1059,7 +1219,9 @@ def push_apply(req: PushRequest, db: Session = Depends(get_session)) -> Dict[str
             results.append({
                 "wix_id": wix_id,
                 "db_parent_id": plan["db_parent_id"],
-                "name_updated_to": plan["target_name"],
+                "before_name": before_name,
+                "name_updated_to": verified_name,
+                "description_length_after": len(verified_description or ""),
                 "variant_updates": variant_updates,
                 "variant_errors": variant_errors,
                 "info_section_errors": info_section_errors,
@@ -1081,7 +1243,7 @@ def push_apply(req: PushRequest, db: Session = Depends(get_session)) -> Dict[str
             })
 
     return {
-        "ok": True,
+        "ok": errors == 0,
         "mode": "apply",
         "success": success,
         "skipped": skipped,
